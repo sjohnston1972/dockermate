@@ -1,0 +1,39 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.pnp.*
+.yarn/cache
+.yarn/install-state.gz
+
+# Build / runtime
+dist/
+build/
+coverage/
+*.log
+*.pid
+*.seed
+
+# Local scratch (compose-config staging, throwaway notes)
+.scratch/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker / local volumes (if any ever land here)
+data/
+volumes/

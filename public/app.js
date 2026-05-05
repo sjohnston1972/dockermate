@@ -1,0 +1,201 @@
+const grid = document.getElementById('grid');
+const summary = document.getElementById('summary');
+const search = document.getElementById('search');
+const refreshBtn = document.getElementById('refresh-btn');
+const checkUpdatesBtn = document.getElementById('check-updates-btn');
+
+let containers = [];
+let updateStatus = {}; // name -> { status, localDigest, remoteDigest }
+
+async function loadContainers() {
+  const res = await fetch('/api/containers');
+  containers = await res.json();
+  render();
+}
+
+function stateColor(state) {
+  if (state === 'running') return 'bg-secondary text-secondary';
+  if (state === 'exited' || state === 'dead') return 'bg-error text-error';
+  return 'bg-tertiary text-tertiary';
+}
+
+function uptimeText(startedAt, state) {
+  if (!startedAt || state !== 'running') return '—';
+  const ms = Date.now() - new Date(startedAt).getTime();
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+function tile(c) {
+  const filter = search.value.toLowerCase();
+  if (filter && !`${c.name} ${c.image} ${c.composeProject || ''}`.toLowerCase().includes(filter)) return '';
+  const upd = updateStatus[c.name];
+  const updateAvailable = upd?.status === 'update_available';
+  const upToDate = upd?.status === 'up_to_date';
+  const sc = stateColor(c.state);
+  const stateBg = sc.split(' ')[0] + '/10';
+  const stateText = sc.split(' ')[1];
+
+  let updateBadge = '';
+  if (updateAvailable) {
+    updateBadge = `<span class="text-[10px] font-bold bg-primary/10 text-primary px-2 py-1 rounded-full uppercase tracking-tighter flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-primary dot-pulse"></span>Update</span>`;
+  } else if (upToDate) {
+    updateBadge = `<span class="text-[10px] font-bold bg-secondary/10 text-secondary px-2 py-1 rounded-full uppercase tracking-tighter">Latest</span>`;
+  } else if (upd?.status === 'unknown') {
+    updateBadge = `<span class="text-[10px] font-bold bg-outline-variant/30 text-on-surface-variant px-2 py-1 rounded-full uppercase tracking-tighter" title="${upd.reason || ''}">Unchecked</span>`;
+  }
+
+  return `
+    <div class="bg-surface-container-lowest rounded-xl shadow-[0px_24px_48px_rgba(33,37,41,0.04)] p-6 flex flex-col gap-4 ${updateAvailable ? 'tile-pulse' : ''}" data-name="${c.name}">
+      <div class="flex justify-between items-start">
+        <div class="flex items-center gap-3 min-w-0">
+          <span class="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-lg">deployed_code</span>
+          <div class="min-w-0">
+            <p class="text-base font-bold text-on-surface truncate" title="${c.name}">${c.name}</p>
+            <p class="text-[10px] text-outline uppercase font-bold tracking-widest truncate" title="${c.composeProject || 'standalone'}">${c.composeProject ? c.composeProject + '/' + c.composeService : 'standalone'}</p>
+          </div>
+        </div>
+        ${updateBadge}
+      </div>
+
+      <div class="flex items-baseline gap-2">
+        <span class="text-2xl font-extrabold text-on-surface -tracking-[0.02em] truncate" title="${c.tag || 'latest'}">${c.tag || 'latest'}</span>
+        <span class="text-xs text-on-surface-variant truncate" title="${c.repo || ''}">${shortRepo(c.repo)}</span>
+      </div>
+
+      <div class="grid grid-cols-3 gap-2 text-center pt-2 border-t border-surface-container-low">
+        <div>
+          <p class="text-[10px] text-outline uppercase font-bold tracking-widest">State</p>
+          <p class="text-sm font-bold ${stateText} flex items-center justify-center gap-1">
+            <span class="w-1.5 h-1.5 rounded-full ${stateBg}"></span>
+            ${c.state}
+          </p>
+        </div>
+        <div>
+          <p class="text-[10px] text-outline uppercase font-bold tracking-widest">Uptime</p>
+          <p class="text-sm font-bold text-on-surface">${uptimeText(c.startedAt, c.state)}</p>
+        </div>
+        <div>
+          <p class="text-[10px] text-outline uppercase font-bold tracking-widest">Restarts</p>
+          <p class="text-sm font-bold text-on-surface">${c.restartCount}</p>
+        </div>
+      </div>
+
+      ${c.ports.length ? `<div class="flex flex-wrap gap-1 pt-1"><span class="text-[10px] text-outline uppercase font-bold tracking-widest mr-1">Ports</span>${c.ports.map(p => `<span class="text-[10px] font-bold bg-outline-variant/20 text-on-surface-variant px-2 py-0.5 rounded">${p}</span>`).join('')}</div>` : ''}
+      ${c.health ? `<div class="text-[10px] text-outline uppercase font-bold tracking-widest">Health: <span class="text-on-surface">${c.health}</span></div>` : ''}
+    </div>
+  `;
+}
+
+function shortRepo(r) {
+  if (!r) return '';
+  if (r.length > 38) return '…' + r.slice(-36);
+  return r;
+}
+
+function render() {
+  const tiles = containers.map(tile).filter(Boolean).join('');
+  grid.innerHTML = tiles || '<div class="col-span-full text-center text-on-surface-variant py-16">No containers match.</div>';
+  const running = containers.filter(c => c.state === 'running').length;
+  const updates = Object.values(updateStatus).filter(u => u.status === 'update_available').length;
+  summary.textContent = `${containers.length} containers · ${running} running · ${updates} update${updates === 1 ? '' : 's'} available`;
+}
+
+async function checkUpdates() {
+  checkUpdatesBtn.disabled = true;
+  checkUpdatesBtn.classList.add('opacity-60');
+  for (const c of containers) {
+    try {
+      const res = await fetch(`/api/containers/${encodeURIComponent(c.name)}/update-status`);
+      const json = await res.json();
+      updateStatus[c.name] = json;
+      render();
+    } catch (e) {
+      updateStatus[c.name] = { status: 'unknown', reason: String(e) };
+    }
+  }
+  checkUpdatesBtn.disabled = false;
+  checkUpdatesBtn.classList.remove('opacity-60');
+}
+
+refreshBtn.addEventListener('click', loadContainers);
+search.addEventListener('input', render);
+checkUpdatesBtn.addEventListener('click', checkUpdates);
+
+loadContainers().then(() => {
+  // Kick off update check automatically once on first load.
+  checkUpdates();
+});
+
+// ---- Chat ----
+const fab = document.getElementById('chat-fab');
+const panel = document.getElementById('chat-panel');
+const closeBtn = document.getElementById('chat-close');
+const log = document.getElementById('chat-log');
+const form = document.getElementById('chat-form');
+const input = document.getElementById('chat-input');
+
+const history = []; // OpenAI-style messages, persisted in-memory only
+
+function appendMsg(role, content) {
+  const div = document.createElement('div');
+  div.className = role === 'user' ? 'chat-msg-user' : role === 'assistant' ? 'chat-msg-assistant' : 'chat-msg-tool';
+  div.textContent = content;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+fab.addEventListener('click', () => {
+  panel.classList.remove('hidden');
+  fab.classList.add('hidden');
+  if (history.length === 0) {
+    appendMsg('assistant', "Hey — I can list, inspect, restart, upgrade and exec into any container on this host. Try: 'what needs upgrading?' or 'upgrade librechat'.");
+  }
+  input.focus();
+});
+closeBtn.addEventListener('click', () => {
+  panel.classList.add('hidden');
+  fab.classList.remove('hidden');
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  appendMsg('user', text);
+  history.push({ role: 'user', content: text });
+
+  const thinking = document.createElement('div');
+  thinking.className = 'chat-msg-tool';
+  thinking.textContent = 'thinking…';
+  log.appendChild(thinking);
+  log.scrollTop = log.scrollHeight;
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: history }),
+    });
+    const json = await res.json();
+    thinking.remove();
+    if (json.error) {
+      appendMsg('assistant', `error: ${json.error}`);
+      return;
+    }
+    appendMsg('assistant', json.reply || '(no reply)');
+    history.push({ role: 'assistant', content: json.reply || '' });
+
+    // Refresh container view in case the bot changed state.
+    loadContainers();
+  } catch (e) {
+    thinking.remove();
+    appendMsg('assistant', `error: ${e.message}`);
+  }
+});

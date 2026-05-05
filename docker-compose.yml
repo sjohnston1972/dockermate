@@ -1,0 +1,23 @@
+services:
+  dockermate:
+    build: .
+    image: dockermate:local
+    container_name: dockermate
+    restart: unless-stopped
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - PORT=8080
+    volumes:
+      # Talk to Docker on the host. On Docker Desktop for Windows this
+      # transparently maps to the named pipe \\.\pipe\docker_engine.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Compose files live under C:/docker — mount the whole tree so the bot
+      # can run `docker compose pull/up` against any service it owns.
+      - "C:/docker:/docker"
+    networks:
+      - net_core
+
+networks:
+  net_core:
+    external: true

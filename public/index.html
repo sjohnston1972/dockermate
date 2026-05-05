@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html class="light" lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dockermate</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          'primary': '#0059bb',
+          'primary-container': '#0070ea',
+          'secondary': '#006c4f',
+          'tertiary': '#585c61',
+          'error': '#ba1a1a',
+          'surface': '#f8f9fa',
+          'surface-container-low': '#f3f4f5',
+          'surface-container-lowest': '#ffffff',
+          'surface-container-high': '#e7e8e9',
+          'surface-container-highest': '#e1e3e4',
+          'on-surface': '#191c1d',
+          'on-surface-variant': '#414754',
+          'outline': '#717786',
+          'outline-variant': '#c1c6d7',
+        },
+        fontFamily: { body: ['Inter'], headline: ['Inter'], label: ['Inter'] },
+        borderRadius: { DEFAULT: '0.25rem', lg: '0.5rem', xl: '0.75rem', full: '9999px' },
+      },
+    },
+  };
+</script>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="bg-surface font-body text-on-surface">
+
+<header class="flex items-center justify-between px-6 w-full sticky top-0 z-40 bg-white h-16 shadow-sm font-['Inter'] text-sm font-medium tracking-tight">
+  <div class="flex items-center gap-8">
+    <span class="text-xl font-bold tracking-tighter text-slate-900 flex items-center gap-2">
+      <span class="material-symbols-outlined text-primary">deployed_code</span>
+      Dockermate
+    </span>
+    <div class="hidden md:flex items-center gap-6">
+      <a class="text-blue-600 border-b-2 border-blue-600 py-5" href="#">Containers</a>
+    </div>
+  </div>
+  <div class="flex items-center gap-4">
+    <div class="relative hidden lg:block">
+      <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-lg">search</span>
+      <input id="search" class="bg-surface-container-low border-none rounded-lg pl-10 pr-4 py-2 w-64 text-sm focus:ring-2 focus:ring-primary/20" placeholder="Filter containers..." type="text" />
+    </div>
+    <button id="refresh-btn" class="p-2 text-outline hover:bg-slate-50 rounded-full transition-colors" title="Refresh">
+      <span class="material-symbols-outlined">refresh</span>
+    </button>
+  </div>
+</header>
+
+<main class="max-w-[1600px] mx-auto p-8">
+  <div class="mb-10 flex justify-between items-end">
+    <div>
+      <div class="flex items-center gap-2 mb-2">
+        <span id="status-dot" class="w-2 h-2 rounded-full bg-secondary"></span>
+        <span class="text-[10px] font-bold tracking-widest text-on-surface-variant uppercase">Home Docker / Live</span>
+      </div>
+      <h1 class="text-4xl font-bold text-on-surface tracking-tight">Containers</h1>
+      <p id="summary" class="text-on-surface-variant mt-2 text-sm">loading…</p>
+    </div>
+    <div class="flex gap-3">
+      <button id="check-updates-btn" class="bg-surface-container-highest text-on-surface px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition-all flex items-center gap-2">
+        <span class="material-symbols-outlined text-sm">cloud_sync</span>
+        Check for updates
+      </button>
+    </div>
+  </div>
+
+  <div id="grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"></div>
+</main>
+
+<!-- Floating chat -->
+<button id="chat-fab" class="fixed right-8 bottom-8 w-14 h-14 bg-gradient-to-br from-primary to-primary-container text-white rounded-full flex items-center justify-center shadow-2xl shadow-primary/40 hover:scale-105 active:scale-95 transition-all z-40">
+  <span class="material-symbols-outlined">chat</span>
+</button>
+
+<section id="chat-panel" class="hidden fixed right-6 bottom-6 w-[380px] h-[560px] bg-surface-container-lowest rounded-xl shadow-[0px_24px_48px_rgba(33,37,41,0.18)] flex flex-col overflow-hidden z-50 border border-outline-variant/20">
+  <header class="flex items-center justify-between px-5 py-3 bg-gradient-to-br from-primary to-primary-container text-white">
+    <div class="flex items-center gap-2">
+      <span class="material-symbols-outlined">smart_toy</span>
+      <div>
+        <p class="text-sm font-bold leading-tight">Dockermate</p>
+        <p class="text-[10px] uppercase tracking-widest opacity-80">Ask me about your containers</p>
+      </div>
+    </div>
+    <button id="chat-close" class="p-1 hover:bg-white/10 rounded-full"><span class="material-symbols-outlined text-sm">close</span></button>
+  </header>
+  <div id="chat-log" class="flex-1 overflow-y-auto p-4 space-y-3 bg-surface-container-low/40"></div>
+  <form id="chat-form" class="border-t border-outline-variant/10 p-3 flex gap-2 bg-white">
+    <input id="chat-input" autocomplete="off" placeholder="e.g. what needs upgrading?" class="flex-1 bg-surface-container-low border-none rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/20" />
+    <button class="bg-primary text-white rounded-lg px-4 text-sm font-bold flex items-center gap-1 hover:bg-primary-container">
+      <span class="material-symbols-outlined text-sm">send</span>
+    </button>
+  </form>
+</section>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
