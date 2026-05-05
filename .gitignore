@@ -5,6 +5,8 @@
 
 # Node
 node_modules/
+docs/node_modules/
+docs/package-lock.json
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

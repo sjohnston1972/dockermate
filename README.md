@@ -2,6 +2,8 @@
 
 A self-hosted dashboard + chatbot for the Docker host it runs on.
 
+![dockermate screenshot](docs/screenshot.png)
+
 - **Tile grid** of every container — image, version (tag), state, uptime, restarts, ports, health.
 - **Soft pulse** on any tile whose registry digest differs from the local image — a one-glance "this needs upgrading" signal.
 - **Bottom-right chatbot** (OpenAI / ChatGPT) with **full container control**: list, inspect, logs, pull, start/stop/restart, `docker compose pull` + `up -d` against the owning compose file, and `exec` into running containers.
@@ -77,6 +79,22 @@ Default model is `gpt-4o-mini`. Set `OPENAI_MODEL=gpt-4o` (or any other tool-cap
 - **Authoritative gate is Cloudflare Access** — there is no app-level auth. If you publish this without Access (or equivalent), anyone reaching the URL can do anything `docker.sock` can do, including running arbitrary commands inside any container.
 - The chatbot can call `exec_in_container` and `compose_*` operations. That is intentional, but it means whoever can chat can effectively root the host. Treat the URL like SSH.
 - `.env` is gitignored. Don't commit it.
+
+## Regenerating the screenshot
+
+The screenshot in this README is captured by a one-shot Playwright run against
+the live site on the local Docker network. From the project root:
+
+```bash
+MSYS_NO_PATHCONV=1 docker run --rm \
+  --network net_core \
+  -v "$PWD/docs:/work" \
+  -w /work \
+  mcr.microsoft.com/playwright:v1.49.0-jammy \
+  bash -lc "npm install --omit=dev --silent && node screenshot.mjs"
+```
+
+(`MSYS_NO_PATHCONV=1` is only needed in Git Bash on Windows.)
 
 ## Layout
 
