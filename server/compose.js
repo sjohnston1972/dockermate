@@ -31,8 +31,8 @@ export function runCmd(cmd, args, { cwd, timeoutMs = 10 * 60 * 1000 } = {}) {
       clearTimeout(timer);
       resolve({
         exitCode: code,
-        stdout: stdout.slice(-20000),
-        stderr: stderr.slice(-20000),
+        stdout: cleanComposeOutput(stdout).slice(-8000),
+        stderr: cleanComposeOutput(stderr).slice(-8000),
         cmd: `${cmd} ${args.join(' ')}`,
         cwd,
       });
@@ -42,4 +42,21 @@ export function runCmd(cmd, args, { cwd, timeoutMs = 10 * 60 * 1000 } = {}) {
       resolve({ exitCode: -1, stdout: '', stderr: String(err), cmd: `${cmd} ${args.join(' ')}`, cwd });
     });
   });
+}
+
+// Compose pull/up emit thousands of progress-bar lines (one per layer, per
+// frame) that bloat job logs and bury the actual error. Drop pure "Downloading
+// N MB" / "Extracting" progress lines, keep state transitions and errors,
+// and collapse consecutive duplicates.
+function cleanComposeOutput(s) {
+  if (!s) return '';
+  const lines = s.split(/\r?\n/);
+  const kept = [];
+  const skip = /^\s+[0-9a-f]{8,}\s+(Downloading|Extracting|Verifying Checksum|Waiting)\s+\d/;
+  for (const line of lines) {
+    if (skip.test(line)) continue;
+    if (kept.length && kept[kept.length - 1] === line) continue; // dedupe consecutive
+    kept.push(line);
+  }
+  return kept.join('\n');
 }

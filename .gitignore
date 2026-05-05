@@ -34,6 +34,9 @@ coverage/
 Thumbs.db
 desktop.ini
 
+# Claude Code local state
+.claude/
+
 # Docker / local volumes (if any ever land here)
 data/
 volumes/

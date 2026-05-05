@@ -1,9 +1,11 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listContainers, getLogs } from './docker.js';
+import { listContainers, getLogs, pullImage, restartContainer } from './docker.js';
 import { checkImageUpdate } from './registry.js';
+import { runCompose } from './compose.js';
 import { chat } from './chat.js';
+import { createJob, getJob, updateJob, appendStep } from './jobs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -44,6 +46,78 @@ app.get('/api/containers/:name/logs', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: String(e.message || e) });
   }
+});
+
+// Upgrade a container in-place. This kicks off an async job and returns a
+// jobId immediately — the actual pull+recreate is run in the background and
+// the UI polls /api/jobs/:id. Doing it this way avoids Cloudflare's 100s
+// response timeout for slow image pulls (e.g. multi-GB images).
+app.post('/api/containers/:name/upgrade', async (req, res) => {
+  try {
+    const containers = await listContainers();
+    const c = containers.find(x => x.name === req.params.name);
+    if (!c) return res.status(404).json({ error: 'not found' });
+
+    const job = createJob({ kind: 'upgrade', target: c.name });
+
+    // Run in the background.
+    runUpgrade(job.id, c).catch((err) => {
+      updateJob(job.id, { state: 'failed', error: String(err.message || err), finishedAt: Date.now() });
+    });
+
+    res.status(202).json({ jobId: job.id, target: c.name, mode: c.composeFile ? 'compose' : 'pull+restart' });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+async function runUpgrade(jobId, c) {
+  updateJob(jobId, { state: 'running' });
+
+  if (c.composeFile && c.composeService) {
+    appendStep(jobId, { step: 'compose pull', state: 'running' });
+    const pull = await runCompose(c.composeFile, c.composeWorkingDir, ['pull', c.composeService], { timeoutMs: 30 * 60 * 1000 });
+    // Replace the running step with the final one.
+    const job = getJob(jobId);
+    job.steps[job.steps.length - 1] = { step: 'compose pull', ...pull };
+    if (pull.exitCode !== 0) {
+      updateJob(jobId, { state: 'failed', error: `compose pull exited ${pull.exitCode}`, finishedAt: Date.now() });
+      return;
+    }
+
+    appendStep(jobId, { step: 'compose up -d', state: 'running' });
+    const up = await runCompose(c.composeFile, c.composeWorkingDir, ['up', '-d', c.composeService], { timeoutMs: 10 * 60 * 1000 });
+    const job2 = getJob(jobId);
+    job2.steps[job2.steps.length - 1] = { step: 'compose up -d', ...up };
+    if (up.exitCode !== 0) {
+      updateJob(jobId, { state: 'failed', error: `compose up exited ${up.exitCode}`, finishedAt: Date.now() });
+      return;
+    }
+  } else {
+    appendStep(jobId, { step: 'docker pull', state: 'running' });
+    const pulled = await pullImage(c.image);
+    const job = getJob(jobId);
+    job.steps[job.steps.length - 1] = { step: 'docker pull', summary: pulled.summary };
+    appendStep(jobId, { step: 'restart', state: 'running' });
+    await restartContainer(c.name);
+    const job2 = getJob(jobId);
+    job2.steps[job2.steps.length - 1] = { step: 'restart', ok: true };
+  }
+
+  const after = (await listContainers()).find(x => x.name === c.name);
+  const status = after ? await checkImageUpdate({ repo: after.repo, tag: after.tag, currentImageId: after.imageId }) : null;
+  updateJob(jobId, {
+    state: 'done',
+    result: { state: after?.state, imageId: after?.imageId, status, image: after?.image, tag: after?.tag },
+    finishedAt: Date.now(),
+  });
+}
+
+app.get('/api/jobs/:id', (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'not found' });
+  res.json(job);
 });
 
 app.post('/api/chat', async (req, res) => {

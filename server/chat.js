@@ -21,7 +21,9 @@ You can list, inspect, restart, stop, start, pull, recreate, exec into, and view
 Rules:
 - Be concise. Talk like a senior sysadmin: short, factual, no fluff.
 - Before any destructive action (stop, recreate, exec that mutates state), state what you're about to do in one sentence and proceed unless the user said "ask first".
-- When the user asks "what needs upgrading", call list_containers and check_image_update for each, and summarize.
+- For "what needs upgrading?" type questions, use check_all_updates (one call) — do NOT loop check_image_update per container.
+- When using check_image_update for a single container, pass the CONTAINER name (e.g. "kopis-postgres"), never an image reference.
+- A status of "unknown" with reason="no remote digest" means the image was built locally and has no registry to compare against — report it as "locally built, no registry to check" rather than as a failure.
 - Prefer compose-aware operations over bare docker pull/run when a container has compose labels.
 - If a container has no compose labels, fall back to docker pull + restart.
 - Never invent container names or image tags — if uncertain, list_containers first.`;
@@ -66,12 +68,20 @@ const tools = [
     type: 'function',
     function: {
       name: 'check_image_update',
-      description: 'Check whether a newer image is available in the registry for a given container.',
+      description: 'Check whether a newer image is available in the registry for a single container. Use the CONTAINER name (e.g. "kopis-postgres"), not the image reference. To check all containers at once, prefer check_all_updates instead.',
       parameters: {
         type: 'object',
-        properties: { name: { type: 'string' } },
+        properties: { name: { type: 'string', description: 'Container name (not image ref).' } },
         required: ['name'],
       },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_all_updates',
+      description: 'Check every container on the host for image updates in one call. Returns an array of {name, image, status, localDigest, remoteDigest, reason}. status is one of: update_available, up_to_date, unknown. Locally-built images (no remote registry) report status=unknown with reason="no remote digest" — that means the image was built here, not that the check failed.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
   {
@@ -176,9 +186,19 @@ async function runTool(name, args) {
       return await getLogs(args.name, args.tail || 200);
     case 'check_image_update': {
       const containers = await listContainers();
-      const c = containers.find(x => x.name === args.name || x.id === args.name || x.shortId === args.name);
-      if (!c) return { error: `container ${args.name} not found` };
-      return await checkImageUpdate({ repo: c.repo, tag: c.tag, currentImageId: c.imageId });
+      const c = containers.find(x =>
+        x.name === args.name || x.id === args.name || x.shortId === args.name || x.image === args.name
+      );
+      if (!c) return { error: `container ${args.name} not found — pass the container name, not the image ref` };
+      return { name: c.name, image: c.image, ...await checkImageUpdate({ repo: c.repo, tag: c.tag, currentImageId: c.imageId }) };
+    }
+    case 'check_all_updates': {
+      const containers = await listContainers();
+      const results = await Promise.all(containers.map(async (c) => {
+        const r = await checkImageUpdate({ repo: c.repo, tag: c.tag, currentImageId: c.imageId });
+        return { name: c.name, image: c.image, ...r };
+      }));
+      return results;
     }
     case 'pull_image':
       return await pullImage(args.image);

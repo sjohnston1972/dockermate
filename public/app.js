@@ -1,3 +1,5 @@
+import { dialog, toast } from './dialog.js';
+
 const grid = document.getElementById('grid');
 const summary = document.getElementById('summary');
 const search = document.getElementById('search');
@@ -6,6 +8,7 @@ const checkUpdatesBtn = document.getElementById('check-updates-btn');
 
 let containers = [];
 let updateStatus = {}; // name -> { status, localDigest, remoteDigest }
+const upgradingNames = new Set();
 
 async function loadContainers() {
   const res = await fetch('/api/containers');
@@ -41,17 +44,21 @@ function tile(c) {
   const stateBg = sc.split(' ')[0] + '/10';
   const stateText = sc.split(' ')[1];
 
+  const upgrading = upgradingNames.has(c.name);
   let updateBadge = '';
-  if (updateAvailable) {
-    updateBadge = `<span class="text-[10px] font-bold bg-primary/10 text-primary px-2 py-1 rounded-full uppercase tracking-tighter flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-primary dot-pulse"></span>Update</span>`;
+  if (upgrading) {
+    updateBadge = `<span class="text-[10px] font-bold bg-primary/10 text-primary px-2 py-1 rounded-full uppercase tracking-tighter flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-primary dot-pulse"></span>Upgrading…</span>`;
+  } else if (updateAvailable) {
+    updateBadge = `<button data-upgrade="${c.name}" class="text-[10px] font-bold bg-primary text-white px-2.5 py-1 rounded-full uppercase tracking-tighter flex items-center gap-1 hover:bg-primary-container transition-colors shadow-sm shadow-primary/30" title="docker compose pull + up -d ${c.composeService || c.name}"><span class="material-symbols-outlined text-[12px]">upgrade</span>Update</button>`;
   } else if (upToDate) {
     updateBadge = `<span class="text-[10px] font-bold bg-secondary/10 text-secondary px-2 py-1 rounded-full uppercase tracking-tighter">Latest</span>`;
   } else if (upd?.status === 'unknown') {
-    updateBadge = `<span class="text-[10px] font-bold bg-outline-variant/30 text-on-surface-variant px-2 py-1 rounded-full uppercase tracking-tighter" title="${upd.reason || ''}">Unchecked</span>`;
+    const isLocal = upd.reason === 'no remote digest';
+    updateBadge = `<span class="text-[10px] font-bold bg-outline-variant/30 text-on-surface-variant px-2 py-1 rounded-full uppercase tracking-tighter" title="${upd.reason || ''}">${isLocal ? 'Local' : 'Unchecked'}</span>`;
   }
 
   return `
-    <div class="bg-surface-container-lowest rounded-xl shadow-[0px_24px_48px_rgba(33,37,41,0.04)] p-6 flex flex-col gap-4 ${updateAvailable ? 'tile-pulse' : ''}" data-name="${c.name}">
+    <div class="bg-surface-container-lowest rounded-xl shadow-[0px_24px_48px_rgba(33,37,41,0.04)] p-6 flex flex-col gap-4 ${updateAvailable && !upgrading ? 'tile-pulse' : ''}" data-name="${c.name}">
       <div class="flex justify-between items-start">
         <div class="flex items-center gap-3 min-w-0">
           <span class="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-lg">deployed_code</span>
@@ -127,6 +134,96 @@ refreshBtn.addEventListener('click', loadContainers);
 search.addEventListener('input', render);
 checkUpdatesBtn.addEventListener('click', checkUpdates);
 
+grid.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-upgrade]');
+  if (!btn) return;
+  const name = btn.dataset.upgrade;
+  if (upgradingNames.has(name)) return;
+
+  const ok = await dialog.confirm({
+    title: `Upgrade ${name}?`,
+    message: `Pull the latest image and recreate "${name}". The container will briefly go offline while it's recreated.`,
+    confirmLabel: 'Upgrade',
+    cancelLabel: 'Cancel',
+    variant: 'info',
+  });
+  if (!ok) return;
+
+  upgradingNames.add(name);
+  render();
+  const progressToast = toast(`Pulling latest image…`, { title: name, variant: 'info', duration: 0 });
+
+  try {
+    // Kick off the job (returns immediately with a jobId).
+    const startRes = await fetchJson(`/api/containers/${encodeURIComponent(name)}/upgrade`, { method: 'POST' });
+    if (!startRes.ok) throw new Error(startRes.error || `kickoff failed (${startRes.status})`);
+    const { jobId } = startRes.body;
+
+    // Poll the job until it terminates. Up to ~30 minutes.
+    const finalJob = await pollJob(jobId, {
+      onStep: (step) => { progressToast.update?.(`${step}…`, name); },
+      maxMs: 30 * 60 * 1000,
+    });
+
+    progressToast.dismiss();
+
+    if (finalJob.state === 'done') {
+      if (finalJob.result?.status) updateStatus[name] = { name, ...finalJob.result.status };
+      toast(`${name} upgraded successfully`, { variant: 'success', title: 'Done' });
+    } else {
+      const last = finalJob.steps?.[finalJob.steps.length - 1];
+      const detail = last
+        ? `${last.step}\n\n${(last.stderr || last.stdout || finalJob.error || '(no output)').slice(-1500)}`
+        : finalJob.error || 'failed';
+      await dialog.custom({
+        title: `Upgrade failed: ${name}`,
+        message: 'The upgrade did not complete. Last step output:',
+        body: `<pre class="dialog-detail">${escapeHtmlSafe(detail)}</pre>`,
+        confirmLabel: 'Dismiss',
+        showCancel: false,
+        variant: 'error',
+      });
+    }
+  } catch (err) {
+    progressToast.dismiss();
+    await dialog.alert({ title: `Upgrade error: ${name}`, message: err.message, variant: 'error' });
+  } finally {
+    upgradingNames.delete(name);
+    await loadContainers();
+  }
+});
+
+async function fetchJson(url, opts) {
+  const res = await fetch(url, opts);
+  const text = await res.text();
+  let body = null;
+  try { body = JSON.parse(text); } catch { /* fall through */ }
+  if (!body) return { ok: false, status: res.status, error: text.slice(0, 200) || `HTTP ${res.status}` };
+  return { ok: res.ok, status: res.status, body, error: body.error };
+}
+
+async function pollJob(jobId, { onStep, maxMs = 30 * 60 * 1000, intervalMs = 1500 } = {}) {
+  const start = Date.now();
+  let lastStep = null;
+  while (Date.now() - start < maxMs) {
+    const res = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`);
+    if (res.ok && res.body) {
+      const job = res.body;
+      if (job.step && job.step !== lastStep) {
+        lastStep = job.step;
+        onStep?.(job.step);
+      }
+      if (job.state === 'done' || job.state === 'failed') return job;
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error('upgrade timed out (still running on the server)');
+}
+
+function escapeHtmlSafe(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 loadContainers().then(() => {
   // Kick off update check automatically once on first load.
   checkUpdates();
@@ -197,5 +294,6 @@ form.addEventListener('submit', async (e) => {
   } catch (e) {
     thinking.remove();
     appendMsg('assistant', `error: ${e.message}`);
+    toast(`Chat request failed: ${e.message}`, { variant: 'error', title: 'Network error' });
   }
 });
