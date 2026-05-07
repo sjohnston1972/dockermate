@@ -69,7 +69,17 @@
       <h1 class="text-4xl font-bold text-on-surface tracking-tight">Containers</h1>
       <p id="summary" class="text-on-surface-variant mt-2 text-sm">loading…</p>
     </div>
-    <div class="flex gap-3">
+    <div class="flex gap-3 items-center">
+      <div id="view-toggle" class="inline-flex bg-surface-container-highest rounded-lg p-1" role="group" aria-label="View mode">
+        <button id="view-cards-btn" class="view-toggle-btn px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1.5 transition-all" aria-pressed="true" title="Card view">
+          <span class="material-symbols-outlined text-sm">grid_view</span>
+          Cards
+        </button>
+        <button id="view-list-btn" class="view-toggle-btn px-3 py-1.5 rounded-md text-sm font-medium flex items-center gap-1.5 transition-all" aria-pressed="false" title="List view">
+          <span class="material-symbols-outlined text-sm">view_list</span>
+          List
+        </button>
+      </div>
       <button id="check-updates-btn" class="bg-surface-container-highest text-on-surface px-4 py-2 rounded-lg text-sm font-medium hover:opacity-90 transition-all flex items-center gap-2">
         <span class="material-symbols-outlined text-sm">cloud_sync</span>
         Check for updates

@@ -5,10 +5,13 @@ const summary = document.getElementById('summary');
 const search = document.getElementById('search');
 const refreshBtn = document.getElementById('refresh-btn');
 const checkUpdatesBtn = document.getElementById('check-updates-btn');
+const viewCardsBtn = document.getElementById('view-cards-btn');
+const viewListBtn = document.getElementById('view-list-btn');
 
 let containers = [];
 let updateStatus = {}; // name -> { status, localDigest, remoteDigest }
 const upgradingNames = new Set();
+let viewMode = localStorage.getItem('dockermate-view') === 'list' ? 'list' : 'cards';
 
 async function loadContainers() {
   const res = await fetch('/api/containers');
@@ -58,8 +61,8 @@ function tile(c) {
   }
 
   return `
-    <div class="bg-surface-container-lowest rounded-xl shadow-[0px_24px_48px_rgba(33,37,41,0.04)] p-6 flex flex-col gap-4 ${updateAvailable && !upgrading ? 'tile-pulse' : ''}" data-name="${c.name}">
-      <div class="flex justify-between items-start">
+    <div class="container-card bg-surface-container-lowest rounded-xl shadow-[0px_24px_48px_rgba(33,37,41,0.04)] p-6 flex flex-col gap-4 ${updateAvailable && !upgrading ? 'tile-pulse' : ''}" data-name="${c.name}">
+      <div class="card-header flex justify-between items-start">
         <div class="flex items-center gap-3 min-w-0">
           <span class="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-lg">deployed_code</span>
           <div class="min-w-0">
@@ -67,15 +70,15 @@ function tile(c) {
             <p class="text-[10px] text-outline uppercase font-bold tracking-widest truncate" title="${c.composeProject || 'standalone'}">${c.composeProject ? c.composeProject + '/' + c.composeService : 'standalone'}</p>
           </div>
         </div>
-        ${updateBadge}
+        <span class="card-badge">${updateBadge}</span>
       </div>
 
-      <div class="flex items-baseline gap-2">
-        <span class="text-2xl font-extrabold text-on-surface -tracking-[0.02em] truncate" title="${c.tag || 'latest'}">${c.tag || 'latest'}</span>
+      <div class="card-version flex items-baseline gap-2">
+        <span class="version-tag text-2xl font-extrabold text-on-surface -tracking-[0.02em] truncate" title="${c.tag || 'latest'}">${c.tag || 'latest'}</span>
         <span class="text-xs text-on-surface-variant truncate" title="${c.repo || ''}">${shortRepo(c.repo)}</span>
       </div>
 
-      <div class="grid grid-cols-3 gap-2 text-center pt-2 border-t border-surface-container-low">
+      <div class="card-stats grid grid-cols-3 gap-2 text-center pt-2 border-t border-surface-container-low">
         <div>
           <p class="text-[10px] text-outline uppercase font-bold tracking-widest">State</p>
           <p class="text-sm font-bold ${stateText} flex items-center justify-center gap-1">
@@ -93,8 +96,8 @@ function tile(c) {
         </div>
       </div>
 
-      ${c.ports.length ? `<div class="flex flex-wrap gap-1 pt-1"><span class="text-[10px] text-outline uppercase font-bold tracking-widest mr-1">Ports</span>${c.ports.map(p => `<span class="text-[10px] font-bold bg-outline-variant/20 text-on-surface-variant px-2 py-0.5 rounded">${p}</span>`).join('')}</div>` : ''}
-      ${c.health ? `<div class="text-[10px] text-outline uppercase font-bold tracking-widest">Health: <span class="text-on-surface">${c.health}</span></div>` : ''}
+      ${c.ports.length ? `<div class="card-ports flex flex-wrap gap-1 pt-1"><span class="text-[10px] text-outline uppercase font-bold tracking-widest mr-1">Ports</span>${c.ports.map(p => `<span class="text-[10px] font-bold bg-outline-variant/20 text-on-surface-variant px-2 py-0.5 rounded">${p}</span>`).join('')}</div>` : ''}
+      ${c.health ? `<div class="card-health text-[10px] text-outline uppercase font-bold tracking-widest">Health: <span class="text-on-surface">${c.health}</span></div>` : ''}
     </div>
   `;
 }
@@ -111,6 +114,20 @@ function render() {
   const running = containers.filter(c => c.state === 'running').length;
   const updates = Object.values(updateStatus).filter(u => u.status === 'update_available').length;
   summary.textContent = `${containers.length} containers · ${running} running · ${updates} update${updates === 1 ? '' : 's'} available`;
+}
+
+function applyViewMode() {
+  const isList = viewMode === 'list';
+  grid.classList.toggle('is-list', isList);
+  // Tailwind grid columns only apply in card mode; .is-list overrides via flex.
+  viewCardsBtn.setAttribute('aria-pressed', String(!isList));
+  viewListBtn.setAttribute('aria-pressed', String(isList));
+}
+
+function setViewMode(mode) {
+  viewMode = mode === 'list' ? 'list' : 'cards';
+  localStorage.setItem('dockermate-view', viewMode);
+  applyViewMode();
 }
 
 async function checkUpdates() {
@@ -133,6 +150,9 @@ async function checkUpdates() {
 refreshBtn.addEventListener('click', loadContainers);
 search.addEventListener('input', render);
 checkUpdatesBtn.addEventListener('click', checkUpdates);
+viewCardsBtn.addEventListener('click', () => setViewMode('cards'));
+viewListBtn.addEventListener('click', () => setViewMode('list'));
+applyViewMode();
 
 grid.addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-upgrade]');
