@@ -5,11 +5,70 @@ import { docker } from './docker.js';
 
 const tokenCache = new Map(); // key: registry|repo -> { token, expires }
 
+// A registry call that failed for a reason that says nothing about whether
+// the image/tag exists -- rate-limiting, an auth hiccup, or the registry
+// being briefly unavailable. Distinct from a plain "not found" (404), which
+// legitimately means there's no such tag/manifest to compare against.
+class RegistryError extends Error {
+  constructor(message, { status, retryable = false } = {}) {
+    super(message);
+    this.name = 'RegistryError';
+    this.status = status;
+    this.retryable = retryable;
+  }
+}
+
+function isRetryableStatus(status) {
+  return status === 429 || status === 401 || status === 403 || status >= 500;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Bounded retry with backoff, only for errors explicitly marked retryable
+// (429 rate-limit, 401/403 auth hiccup, 5xx). A non-retryable failure (e.g.
+// a plain network error, or a 404) is rethrown immediately.
+async function withRetry(fn, { attempts = 3, baseDelayMs = 250 } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (!(e instanceof RegistryError) || !e.retryable || i === attempts - 1) throw e;
+      await sleep(baseDelayMs * 2 ** i);
+    }
+  }
+  throw lastErr;
+}
+
+function transientReason(e) {
+  if (e.status === 429) return 'rate-limited';
+  if (e.status === 401 || e.status === 403) return 'auth-error';
+  if (e.status >= 500) return 'registry-unavailable';
+  return 'registry-error';
+}
+
 export async function checkImageUpdate({ repo, tag, currentImageId }) {
   if (!repo || !tag) return { status: 'unknown', reason: 'no repo/tag' };
+  const { registry, path } = parseRepo(repo);
+
+  let remoteDigest;
   try {
-    const { registry, path } = parseRepo(repo);
-    const remoteDigest = await getRemoteDigest(registry, path, tag);
+    remoteDigest = await withRetry(() => getRemoteDigest(registry, path, tag));
+  } catch (e) {
+    if (e instanceof RegistryError && e.retryable) {
+      // Transient registry failure (rate-limit/auth/5xx), not "no registry to
+      // check". Report it as a distinct, clearly-retryable error status
+      // rather than folding it into the same "unknown" bucket the UI uses
+      // for locally-built images.
+      return { status: 'error', reason: transientReason(e), retryable: true };
+    }
+    return { status: 'unknown', reason: String(e.message || e) };
+  }
+
+  try {
     if (!remoteDigest) return { status: 'unknown', reason: 'no remote digest' };
 
     const localDigests = await getLocalRepoDigests(currentImageId);
@@ -63,7 +122,12 @@ async function getAuthToken(registry, path) {
     service = registry;
   }
   const res = await fetch(tokenUrl);
-  if (!res.ok) throw new Error(`auth failed (${service}): ${res.status}`);
+  if (!res.ok) {
+    throw new RegistryError(`auth failed (${service}): ${res.status}`, {
+      status: res.status,
+      retryable: isRetryableStatus(res.status),
+    });
+  }
   const json = await res.json();
   const token = json.token || json.access_token;
   tokenCache.set(key, { token, expires: Date.now() + 4 * 60 * 1000 });
@@ -94,7 +158,18 @@ async function getRemoteDigest(registry, path, tag) {
       ].join(', '),
     },
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    if (isRetryableStatus(res.status)) {
+      throw new RegistryError(`manifest fetch failed (${registry}): ${res.status}`, {
+        status: res.status,
+        retryable: true,
+      });
+    }
+    // Genuine "no such tag/manifest" (404) or another non-retryable client
+    // error -- there is nothing to compare against, but this is not a
+    // transient registry problem.
+    return null;
+  }
   return res.headers.get('docker-content-digest');
 }
 

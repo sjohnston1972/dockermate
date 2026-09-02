@@ -56,6 +56,12 @@ function tile(c) {
     updateBadge = `<button data-upgrade="${c.name}" class="text-[10px] font-bold bg-primary text-white px-2.5 py-1 rounded-full uppercase tracking-tighter flex items-center gap-1 hover:bg-primary-container transition-colors shadow-sm shadow-primary/30" title="docker compose pull + up -d ${c.composeService || c.name}"><span class="material-symbols-outlined text-[12px]">upgrade</span>Update</button>`;
   } else if (upToDate) {
     updateBadge = `<span class="text-[10px] font-bold bg-secondary/10 text-secondary px-2 py-1 rounded-full uppercase tracking-tighter">Latest</span>`;
+  } else if (upd?.status === 'error') {
+    // Transient registry failure (rate-limited/auth/unavailable) -- distinct
+    // from "Local", which means there's no registry to check in the first
+    // place. Visibly different styling (warning color) so it doesn't read
+    // as "this image was built here".
+    updateBadge = `<span class="text-[10px] font-bold bg-error/15 text-error px-2 py-1 rounded-full uppercase tracking-tighter" title="${upd.reason || 'registry error'}">Retry</span>`;
   } else if (upd?.status === 'unknown') {
     const isLocal = upd.reason === 'no remote digest';
     updateBadge = `<span class="text-[10px] font-bold bg-outline-variant/30 text-on-surface-variant px-2 py-1 rounded-full uppercase tracking-tighter" title="${upd.reason || ''}">${isLocal ? 'Local' : 'Unchecked'}</span>`;
