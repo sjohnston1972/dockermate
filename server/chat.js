@@ -10,9 +10,46 @@ import { runCompose } from './compose.js';
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
+// ---------------------------------------------------------------------------
+// exec_in_container policy (issue #13)
+//
+// The container mounts the Docker socket, so exec into any container is
+// effectively root on the host. It is OFF by default and only usable when a
+// human deliberately opts in via config (see .env.example / README) — the
+// capability is never silently dropped, just gated behind deliberate config.
+// ---------------------------------------------------------------------------
+const CHAT_ALLOW_EXEC = /^(1|true|yes)$/i.test(process.env.CHAT_ALLOW_EXEC || '');
+const EXEC_CONTAINER_ALLOWLIST = parseList(process.env.CHAT_EXEC_CONTAINER_ALLOWLIST);
+const EXEC_COMMAND_ALLOWLIST = parseList(process.env.CHAT_EXEC_COMMAND_ALLOWLIST);
+
+function parseList(v) {
+  if (!v || !v.trim()) return null; // null = no additional restriction
+  return v.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+// Returns a human-readable policy error string, or null if the exec call is
+// allowed to proceed.
+function execPolicyError(args) {
+  if (!CHAT_ALLOW_EXEC) {
+    return 'exec is disabled by policy (set CHAT_ALLOW_EXEC=true to opt in — see .env.example)';
+  }
+  const name = args?.name;
+  if (EXEC_CONTAINER_ALLOWLIST && !EXEC_CONTAINER_ALLOWLIST.includes(name)) {
+    return `container "${name}" is not on the exec allowlist (CHAT_EXEC_CONTAINER_ALLOWLIST)`;
+  }
+  if (EXEC_COMMAND_ALLOWLIST) {
+    const cmd = String(args?.cmd || '').trim();
+    const allowed = EXEC_COMMAND_ALLOWLIST.some((prefix) => cmd === prefix || cmd.startsWith(`${prefix} `));
+    if (!allowed) {
+      return 'command is not on the exec command allowlist (CHAT_EXEC_COMMAND_ALLOWLIST)';
+    }
+  }
+  return null;
+}
+
 const SYSTEM_PROMPT = `You are dockermate, Stevie's Docker admin assistant for his home-docker host.
 
-You can list, inspect, restart, stop, start, pull, recreate, exec into, and view logs of any container on the host. When asked to upgrade a container, your default approach is:
+You can list, inspect, restart, stop, start, pull, recreate, exec into, and view logs of any container on the host. exec_in_container may be disabled or restricted (specific containers/commands only) by server policy — if so it returns a policy error instead of running; report that error to Stevie rather than retrying. When asked to upgrade a container, your default approach is:
   1. Identify the compose file & service from the container's labels.
   2. compose_pull_service to fetch the new image.
   3. compose_up_service to recreate just that service.
@@ -28,7 +65,7 @@ Rules:
 - If a container has no compose labels, fall back to docker pull + restart.
 - Never invent container names or image tags — if uncertain, list_containers first.`;
 
-const tools = [
+const ALL_TOOLS = [
   {
     type: 'function',
     function: {
@@ -140,7 +177,7 @@ const tools = [
     type: 'function',
     function: {
       name: 'exec_in_container',
-      description: 'Run a shell command inside a running container and return stdout/stderr.',
+      description: 'Run a shell command inside a running container and return stdout/stderr. May be disabled or allowlist-restricted by server policy.',
       parameters: {
         type: 'object',
         properties: {
@@ -152,6 +189,15 @@ const tools = [
     },
   },
 ];
+
+// Don't even advertise exec_in_container to the model when it's disabled by
+// policy, on top of the runtime check in runTool below (issue #13
+// acceptance criteria: "Optionally omit the tool from the tools array
+// entirely when disabled").
+function getTools() {
+  if (CHAT_ALLOW_EXEC) return ALL_TOOLS;
+  return ALL_TOOLS.filter((t) => t.function.name !== 'exec_in_container');
+}
 
 async function runTool(name, args) {
   switch (name) {
@@ -221,8 +267,11 @@ async function runTool(name, args) {
         : ['up', '-d', c.composeService];
       return await runCompose(c.composeFile, c.composeWorkingDir, opArgs);
     }
-    case 'exec_in_container':
+    case 'exec_in_container': {
+      const policyError = execPolicyError(args);
+      if (policyError) return { error: policyError };
       return await execInContainer(args.name, args.cmd);
+    }
     default:
       return { error: `unknown tool ${name}` };
   }
@@ -234,7 +283,7 @@ export async function chat(history) {
     const resp = await openai.chat.completions.create({
       model: MODEL,
       messages,
-      tools,
+      tools: getTools(),
       tool_choice: 'auto',
     });
     const msg = resp.choices[0].message;

@@ -6,7 +6,7 @@ A self-hosted dashboard + chatbot for the Docker host it runs on.
 
 - **Tile grid** of every container — image, version (tag), state, uptime, restarts, ports, health.
 - **Soft pulse** on any tile whose registry digest differs from the local image — a one-glance "this needs upgrading" signal.
-- **Bottom-right chatbot** (OpenAI / ChatGPT) with **full container control**: list, inspect, logs, pull, start/stop/restart, `docker compose pull` + `up -d` against the owning compose file, and `exec` into running containers.
+- **Bottom-right chatbot** (OpenAI / ChatGPT) that can list, inspect, and tail logs freely, and — subject to server-enforced guardrails (see [Chatbot guardrails](#chatbot-guardrails)) — pull, start/stop/restart, run `docker compose pull` + `up -d` against the owning compose file, and `exec` into running containers.
 - **Compose-aware upgrades** — when a container has compose labels, the bot recreates it via its original compose file rather than a bare `docker run`, preserving env, volumes, and network config.
 - **Cloudflare Access** in front of the public hostname, so the only auth surface is your IdP.
 
@@ -74,11 +74,17 @@ Uses OpenAI's tool-calling. The model has access to:
 
 Default model is `gpt-4o-mini`. Set `OPENAI_MODEL=gpt-4o` (or any other tool-capable model) to change it.
 
+## Chatbot guardrails
+
+The model is not trusted to self-police. Guardrails are enforced server-side in `server/chat.js`, not by asking the model nicely:
+
+- **`exec_in_container` is disabled by default.** With `CHAT_ALLOW_EXEC` unset/false, the tool isn't even offered to the model, and a call to it (however constructed) returns a policy error without ever touching Docker. Set `CHAT_ALLOW_EXEC=true` to opt in, optionally scoped further with `CHAT_EXEC_CONTAINER_ALLOWLIST` / `CHAT_EXEC_COMMAND_ALLOWLIST`. See `.env.example` for details — nothing here is silently dropped, it's all recoverable by deliberate config.
+
 ## Security
 
 - **Cloudflare Access is the primary gate**, and dockermate now also verifies it at the origin as defense-in-depth: every `/api/*` request (except `/api/health`) is checked by `server/auth.js`, which either verifies the `Cf-Access-Jwt-Assertion` header's signature/`aud`/expiry against the team's JWKS (`server/access.js`, configured via `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`) or checks a shared-secret bearer token (`APP_SHARED_SECRET`) — whichever is configured. **This fails closed**: if neither is configured, every protected request is rejected (503) and a loud warning is logged at startup, rather than silently allowing everything through. See `.env.example` for the exact variables.
 - The dockermate web UI (`public/auth.js`) sends the shared secret automatically once you've entered it (prompted once, stored in the browser's localStorage); the Access JWT needs no frontend changes since Cloudflare injects it at the edge.
-- The chatbot can call `exec_in_container` and `compose_*` operations. That is intentional, but it means whoever can chat can effectively root the host. Treat the URL like SSH.
+- The chatbot can call `exec_in_container` (off by default — see [Chatbot guardrails](#chatbot-guardrails)) and `compose_*` operations. That is intentional when enabled, but it means whoever can chat can effectively root the host. Treat the URL like SSH.
 - `.env` is gitignored. Don't commit it.
 
 ## Regenerating the screenshot
