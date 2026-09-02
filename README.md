@@ -76,10 +76,12 @@ Default model is `gpt-4o-mini`. Set `OPENAI_MODEL=gpt-4o` (or any other tool-cap
 
 ## Chatbot guardrails
 
-The model is not trusted to self-police. Guardrails are enforced server-side in `server/chat.js`, not by asking the model nicely:
+The model is not trusted to self-police, and neither is anything the model reads (container logs, exec output). Guardrails are enforced server-side in `server/chat.js`, not by asking the model nicely:
 
 - **`exec_in_container` is disabled by default.** With `CHAT_ALLOW_EXEC` unset/false, the tool isn't even offered to the model, and a call to it (however constructed) returns a policy error without ever touching Docker. Set `CHAT_ALLOW_EXEC=true` to opt in, optionally scoped further with `CHAT_EXEC_CONTAINER_ALLOWLIST` / `CHAT_EXEC_COMMAND_ALLOWLIST`. See `.env.example` for details — nothing here is silently dropped, it's all recoverable by deliberate config.
 - **Every mutating tool call requires a server-enforced confirmation.** `start_container`, `stop_container`, `restart_container`, `pull_image`, `compose_pull_service`, `compose_up_service`, and `exec_in_container` never execute off the model's tool call. Instead the server mints a random, single-use, short-lived (5 min) token bound to that exact tool + arguments and returns it to the browser along with a plain-English description. The UI shows a Confirm/Cancel dialog; only a follow-up `POST /api/chat/confirm` carrying that exact token — which only a human clicking the button can produce — causes the server to run the action. The model never sees the token and cannot mint, guess, or bypass one; a prompt telling the model to "ask first" is not part of this control.
+- **Tool output is treated as untrusted data.** `get_logs` and `exec_in_container` results are wrapped in explicit `BEGIN/END UNTRUSTED TOOL OUTPUT` markers before being fed back to the model, and the system prompt tells the model that content inside a tool result — delimited or not — may have been written by whatever is running in the container, and must never be treated as an instruction, even if it explicitly claims to override prior instructions.
+- **Every mutating tool call is audit-logged** to stdout as a `[chat-audit]` JSON line (and optionally to a file via `CHAT_AUDIT_LOG_FILE`), whether it was proposed, blocked by policy, cancelled, or actually executed — with tool name, resolved arguments (obvious secret-looking fields redacted), and outcome.
 
 ## Security
 
