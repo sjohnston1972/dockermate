@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { listContainers, getLogs, pullImage, recreateContainer } from './docker.js';
 import { checkImageUpdate } from './registry.js';
 import { runCompose } from './compose.js';
-import { chat } from './chat.js';
+import { chat, confirmAction } from './chat.js';
 import { createJob, getJob, updateJob, appendStep } from './jobs.js';
 import { requireAuth } from './auth.js';
 
@@ -182,6 +182,25 @@ app.post('/api/chat', async (req, res) => {
     const { messages } = req.body;
     if (!Array.isArray(messages)) return res.status(400).json({ error: 'messages array required' });
     const result = await chat(messages);
+    res.json(result);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// Server-enforced confirmation handshake for destructive chatbot tools
+// (issue #14). The chat() call above never executes a mutating tool itself —
+// it returns a `pendingAction` with a one-time token. Only this endpoint,
+// invoked when a human clicks Confirm/Cancel in the UI, can cause that
+// specific action to actually run.
+app.post('/api/chat/confirm', async (req, res) => {
+  try {
+    const { confirmationId, decision } = req.body || {};
+    if (!confirmationId || typeof confirmationId !== 'string') {
+      return res.status(400).json({ error: 'confirmationId required' });
+    }
+    const result = await confirmAction(confirmationId, decision === 'confirm' ? 'confirm' : 'cancel');
     res.json(result);
   } catch (e) {
     console.error(e);

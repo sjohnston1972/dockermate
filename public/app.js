@@ -285,7 +285,7 @@ fab.addEventListener('click', () => {
   panel.classList.remove('hidden');
   fab.classList.add('hidden');
   if (history.length === 0) {
-    appendMsg('assistant', "Hey — I can list, inspect, restart, upgrade and exec into any container on this host. Try: 'what needs upgrading?' or 'upgrade librechat'.");
+    appendMsg('assistant', "Hey — I can list, inspect, restart, and upgrade containers on this host (exec is available if enabled by policy). Anything that changes state asks you to confirm first. Try: 'what needs upgrading?' or 'upgrade librechat'.");
   }
   input.focus();
 });
@@ -323,6 +323,8 @@ form.addEventListener('submit', async (e) => {
     appendMsg('assistant', json.reply || '(no reply)');
     history.push({ role: 'assistant', content: json.reply || '' });
 
+    await handlePendingAction(json.pendingAction);
+
     // Refresh container view in case the bot changed state.
     loadContainers();
   } catch (e) {
@@ -331,3 +333,47 @@ form.addEventListener('submit', async (e) => {
     toast(`Chat request failed: ${e.message}`, { variant: 'error', title: 'Network error' });
   }
 });
+
+// A mutating tool call never runs off the model's say-so (issue #14) — the
+// server pauses and hands back a one-time confirmationId + human-readable
+// description. Only clicking Confirm here, which POSTs that exact token to
+// /api/chat/confirm, causes the server to actually run the action.
+async function handlePendingAction(pendingAction) {
+  if (!pendingAction) return;
+
+  const ok = await dialog.confirm({
+    title: 'Confirm chatbot action',
+    message: pendingAction.description,
+    confirmLabel: 'Confirm',
+    cancelLabel: 'Cancel',
+    variant: 'warn',
+    danger: true,
+  });
+
+  const thinking = document.createElement('div');
+  thinking.className = 'chat-msg-tool';
+  thinking.textContent = ok ? 'running…' : 'cancelling…';
+  log.appendChild(thinking);
+  log.scrollTop = log.scrollHeight;
+
+  try {
+    const res = await apiFetch('/api/chat/confirm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ confirmationId: pendingAction.id, decision: ok ? 'confirm' : 'cancel' }),
+    });
+    const json = await res.json();
+    thinking.remove();
+    if (json.error) {
+      appendMsg('assistant', `error: ${json.error}`);
+      return;
+    }
+    appendMsg('assistant', json.reply || '(no reply)');
+    history.push({ role: 'assistant', content: json.reply || '' });
+    await handlePendingAction(json.pendingAction);
+  } catch (e) {
+    thinking.remove();
+    appendMsg('assistant', `error: ${e.message}`);
+    toast(`Confirmation request failed: ${e.message}`, { variant: 'error', title: 'Network error' });
+  }
+}
