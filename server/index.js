@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { listContainers, getLogs, pullImage, restartContainer } from './docker.js';
+import { listContainers, getLogs, pullImage, recreateContainer } from './docker.js';
 import { checkImageUpdate } from './registry.js';
 import { runCompose } from './compose.js';
 import { chat } from './chat.js';
@@ -102,14 +102,35 @@ async function runUpgrade(jobId, c) {
       return;
     }
   } else {
+    const preUpgradeImageId = c.imageId;
+
     appendStep(jobId, { step: 'docker pull', state: 'running' });
     const pulled = await pullImage(c.image);
     const job = getJob(jobId);
     job.steps[job.steps.length - 1] = { step: 'docker pull', summary: pulled.summary };
-    appendStep(jobId, { step: 'restart', state: 'running' });
-    await restartContainer(c.name);
+
+    // `docker restart` would keep running the OLD image (a container is
+    // bound to the image it was created with) — recreate the container from
+    // the newly-pulled image instead, preserving its config.
+    appendStep(jobId, { step: 'recreate', state: 'running' });
+    let recreateResult;
+    try {
+      recreateResult = await recreateContainer(c.name);
+    } catch (err) {
+      const job2 = getJob(jobId);
+      job2.steps[job2.steps.length - 1] = { step: 'recreate', ok: false, error: String(err.message || err) };
+      updateJob(jobId, { state: 'failed', error: String(err.message || err), finishedAt: Date.now() });
+      return;
+    }
     const job2 = getJob(jobId);
-    job2.steps[job2.steps.length - 1] = { step: 'restart', ok: true };
+    job2.steps[job2.steps.length - 1] = { step: 'recreate', ok: true, imageId: recreateResult.imageId };
+
+    // Verify the upgrade actually took effect — never report `done` on a
+    // no-op recreate (e.g. the pull didn't actually fetch anything new).
+    if (!recreateResult.imageId || recreateResult.imageId === preUpgradeImageId) {
+      updateJob(jobId, { state: 'failed', error: 'image unchanged after upgrade', finishedAt: Date.now() });
+      return;
+    }
   }
 
   const after = (await listContainers()).find(x => x.name === c.name);
