@@ -6,6 +6,7 @@ import { checkImageUpdate } from './registry.js';
 import { runCompose } from './compose.js';
 import { chat } from './chat.js';
 import { createJob, getJob, updateJob, appendStep } from './jobs.js';
+import { requireAuth } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
@@ -14,7 +15,13 @@ const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(express.static(PUBLIC_DIR));
 
+// Health check stays public — no credential required, no container/host
+// data returned. Everything else under /api/* requires auth (see
+// server/auth.js): a verified Cloudflare Access JWT and/or the shared
+// secret, whichever is configured. Fails closed if neither is configured.
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+app.use('/api', requireAuth);
 
 app.get('/api/containers', async (_req, res) => {
   try {

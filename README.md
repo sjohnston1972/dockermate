@@ -76,7 +76,8 @@ Default model is `gpt-4o-mini`. Set `OPENAI_MODEL=gpt-4o` (or any other tool-cap
 
 ## Security
 
-- **Authoritative gate is Cloudflare Access** — there is no app-level auth. If you publish this without Access (or equivalent), anyone reaching the URL can do anything `docker.sock` can do, including running arbitrary commands inside any container.
+- **Cloudflare Access is the primary gate**, and dockermate now also verifies it at the origin as defense-in-depth: every `/api/*` request (except `/api/health`) is checked by `server/auth.js`, which either verifies the `Cf-Access-Jwt-Assertion` header's signature/`aud`/expiry against the team's JWKS (`server/access.js`, configured via `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`) or checks a shared-secret bearer token (`APP_SHARED_SECRET`) — whichever is configured. **This fails closed**: if neither is configured, every protected request is rejected (503) and a loud warning is logged at startup, rather than silently allowing everything through. See `.env.example` for the exact variables.
+- The dockermate web UI (`public/auth.js`) sends the shared secret automatically once you've entered it (prompted once, stored in the browser's localStorage); the Access JWT needs no frontend changes since Cloudflare injects it at the edge.
 - The chatbot can call `exec_in_container` and `compose_*` operations. That is intentional, but it means whoever can chat can effectively root the host. Treat the URL like SSH.
 - `.env` is gitignored. Don't commit it.
 
@@ -107,9 +108,12 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 ├── public/               # Static frontend (HTML/CSS/JS)
 │   ├── index.html
 │   ├── app.js
+│   ├── auth.js           # apiFetch() — attaches shared-secret header, prompts once
 │   └── styles.css
 └── server/               # Express + tools
     ├── index.js          # HTTP API
+    ├── auth.js           # /api/* middleware — Access JWT and/or shared secret, fails closed
+    ├── access.js         # Cloudflare Access JWT verifier (JWKS fetch/cache, aud + expiry)
     ├── docker.js         # dockerode wrappers
     ├── compose.js        # spawn `docker compose ...`
     ├── registry.js       # remote digest lookups

@@ -1,4 +1,5 @@
 import { dialog, toast } from './dialog.js';
+import { apiFetch } from './auth.js';
 
 const grid = document.getElementById('grid');
 const summary = document.getElementById('summary');
@@ -14,7 +15,7 @@ const upgradingNames = new Set();
 let viewMode = localStorage.getItem('dockermate-view') === 'list' ? 'list' : 'cards';
 
 async function loadContainers() {
-  const res = await fetch('/api/containers');
+  const res = await apiFetch('/api/containers');
   containers = await res.json();
   render();
 }
@@ -135,7 +136,7 @@ async function checkUpdates() {
   checkUpdatesBtn.classList.add('opacity-60');
   for (const c of containers) {
     try {
-      const res = await fetch(`/api/containers/${encodeURIComponent(c.name)}/update-status`);
+      const res = await apiFetch(`/api/containers/${encodeURIComponent(c.name)}/update-status`);
       const json = await res.json();
       updateStatus[c.name] = json;
       render();
@@ -214,7 +215,7 @@ grid.addEventListener('click', async (e) => {
 });
 
 async function fetchJson(url, opts) {
-  const res = await fetch(url, opts);
+  const res = await apiFetch(url, opts);
   const text = await res.text();
   let body = null;
   try { body = JSON.parse(text); } catch { /* fall through */ }
@@ -295,7 +296,7 @@ form.addEventListener('submit', async (e) => {
   log.scrollTop = log.scrollHeight;
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await apiFetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ messages: history }),
