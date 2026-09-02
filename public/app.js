@@ -140,16 +140,23 @@ function setViewMode(mode) {
 async function checkUpdates() {
   checkUpdatesBtn.disabled = true;
   checkUpdatesBtn.classList.add('opacity-60');
-  for (const c of containers) {
-    try {
-      const res = await apiFetch(`/api/containers/${encodeURIComponent(c.name)}/update-status`);
-      const json = await res.json();
-      updateStatus[c.name] = json;
-      render();
-    } catch (e) {
+  try {
+    // One request for every container's update status, instead of looping
+    // a per-container fetch (which used to re-list/re-inspect every
+    // container on the host once per container checked).
+    const res = await apiFetch('/api/containers/update-status');
+    const json = await res.json();
+    if (Array.isArray(json)) {
+      for (const entry of json) {
+        updateStatus[entry.name] = entry;
+      }
+    }
+  } catch (e) {
+    for (const c of containers) {
       updateStatus[c.name] = { status: 'unknown', reason: String(e) };
     }
   }
+  render();
   checkUpdatesBtn.disabled = false;
   checkUpdatesBtn.classList.remove('opacity-60');
 }
