@@ -13,11 +13,18 @@ export async function checkImageUpdate({ repo, tag, currentImageId }) {
     if (!remoteDigest) return { status: 'unknown', reason: 'no remote digest' };
 
     const localDigests = await getLocalRepoDigests(currentImageId);
-    const localDigest = localDigests.find(d => d.repo === path || d.repo.endsWith('/' + path) || d.repo === repo)?.digest
-      || localDigests[0]?.digest
-      || null;
+    // Only compare against a RepoDigests entry that actually belongs to the
+    // repo we just queried the registry for. An image can carry RepoDigests
+    // for several unrelated repos (pulled/tagged/pushed under more than one
+    // name); comparing the remote digest of `path` against a digest from a
+    // different repo is meaningless and can produce a false positive/negative.
+    // So: no arbitrary fallback to localDigests[0] here.
+    const match = localDigests.find(d => d.repo === path || d.repo.endsWith('/' + path) || d.repo === repo);
+    if (!match) {
+      return { status: 'unknown', reason: `no matching local digest for ${path}`, remoteDigest };
+    }
 
-    if (!localDigest) return { status: 'unknown', reason: 'no local digest', remoteDigest };
+    const localDigest = match.digest;
     const updateAvailable = localDigest !== remoteDigest;
     return { status: updateAvailable ? 'update_available' : 'up_to_date', localDigest, remoteDigest };
   } catch (e) {
@@ -69,11 +76,21 @@ async function getRemoteDigest(registry, path, tag) {
     method: 'HEAD',
     headers: {
       Authorization: `Bearer ${token}`,
+      // A manifest-list/index digest and a platform-specific manifest digest
+      // are two different, non-comparable digests. `docker pull` requests the
+      // list/index types first, and for a multi-arch tag that is what gets
+      // recorded in the local image's RepoDigests. So we request the list/
+      // index media types at a higher q-value here too, to make the registry
+      // prefer returning the same (index) digest Docker stored locally —
+      // rather than letting server-default content negotiation pick a
+      // platform-specific manifest and produce a permanent false "update
+      // available" on multi-arch images. The single-manifest types are kept
+      // as a lower-priority fallback for tags that are not multi-arch.
       Accept: [
-        'application/vnd.docker.distribution.manifest.v2+json',
-        'application/vnd.docker.distribution.manifest.list.v2+json',
-        'application/vnd.oci.image.manifest.v1+json',
         'application/vnd.oci.image.index.v1+json',
+        'application/vnd.docker.distribution.manifest.list.v2+json',
+        'application/vnd.oci.image.manifest.v1+json;q=0.5',
+        'application/vnd.docker.distribution.manifest.v2+json;q=0.5',
       ].join(', '),
     },
   });
