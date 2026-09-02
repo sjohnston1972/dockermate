@@ -141,24 +141,49 @@ export function buildRecreateSpec(inspectData, overrides = {}) {
 // newly-pulled image to a standalone (non-compose) container, since
 // `docker restart` keeps running the image the container was created with.
 //
-// Sequence: inspect -> stop -> remove -> create -> start. If create/start of
-// the new container fails, this rejects and the old container has already
-// been removed (rollback-on-failure is handled by the caller in a follow-up
-// change; see issue #8 — out of scope here).
+// Sequence: inspect -> stop -> remove -> create -> start. If create/start
+// of the new container fails, we make a best-effort attempt to bring the
+// *old* container back (pinned to its original immutable image ID, not the
+// tag, since the tag may now point at the image we just failed to run) so
+// the user isn't left with nothing running. This is best-effort only: no
+// snapshotting, no guarantee the rollback container is identical if the
+// underlying image was removed from the local store.
 export async function recreateContainer(idOrName) {
   const container = docker.getContainer(idOrName);
   const inspectData = await container.inspect();
   const spec = buildRecreateSpec(inspectData);
+  // Pin the rollback spec to the exact old image ID so rollback still works
+  // even though the tag (Config.Image) may since have moved to the new image.
+  const rollbackSpec = buildRecreateSpec(inspectData, { image: inspectData.Image });
 
   await container.stop({ t: 10 }).catch((e) => {
     if (e.statusCode !== 304) throw e; // 304 = already stopped, fine.
   });
   await container.remove();
 
-  const created = await docker.createContainer(spec);
-  await created.start();
-  const after = await created.inspect();
-  return { ok: true, id: after.Id, imageId: after.Image };
+  try {
+    const created = await docker.createContainer(spec);
+    await created.start();
+    const after = await created.inspect();
+    return { ok: true, id: after.Id, imageId: after.Image };
+  } catch (createErr) {
+    let rollback;
+    try {
+      const restored = await docker.createContainer(rollbackSpec);
+      await restored.start();
+      rollback = { ok: true, id: restored.id };
+    } catch (rollbackErr) {
+      rollback = { ok: false, error: String(rollbackErr.message || rollbackErr) };
+    }
+
+    const message = rollback.ok
+      ? `recreate failed: ${createErr.message || createErr}; rolled back to a new container running the previous image`
+      : `recreate failed: ${createErr.message || createErr}; rollback also failed: ${rollback.error}`;
+    const err = new Error(message);
+    err.rollback = rollback;
+    err.cause = createErr;
+    throw err;
+  }
 }
 
 export async function pullImage(imageRef) {

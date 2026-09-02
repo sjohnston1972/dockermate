@@ -117,8 +117,16 @@ async function runUpgrade(jobId, c) {
     try {
       recreateResult = await recreateContainer(c.name);
     } catch (err) {
+      // recreateContainer already made a best-effort attempt to restore the
+      // previous container before rejecting; surface both the original
+      // failure and the rollback outcome rather than throwing uncaught.
       const job2 = getJob(jobId);
-      job2.steps[job2.steps.length - 1] = { step: 'recreate', ok: false, error: String(err.message || err) };
+      job2.steps[job2.steps.length - 1] = {
+        step: 'recreate',
+        ok: false,
+        error: String(err.message || err),
+        rollback: err.rollback || null,
+      };
       updateJob(jobId, { state: 'failed', error: String(err.message || err), finishedAt: Date.now() });
       return;
     }
