@@ -10,6 +10,7 @@
   "dependencies": {
     "dockerode": "^4.0.7",
     "express": "^4.21.2",
+    "jose": "^6.2.10",
     "openai": "^4.79.1"
   }
 }
