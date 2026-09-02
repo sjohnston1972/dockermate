@@ -32,7 +32,28 @@ app.get('/api/containers', async (_req, res) => {
   }
 });
 
-// Lazily check updates one at a time so the page can stream them in.
+// Batch update-status: lists containers ONCE and checks every container's
+// registry status in parallel, instead of the client looping per-container
+// (which used to re-list/re-inspect every container on the host for each
+// container it asked about -- O(N^2) docker inspects for a sweep of N).
+// Registered ahead of the '/:name/update-status' route below so a literal
+// '/update-status' path is never at risk of being swallowed by ':name'.
+app.get('/api/containers/update-status', async (_req, res) => {
+  try {
+    const containers = await listContainers();
+    const results = await Promise.all(containers.map(async (c) => {
+      const status = await checkImageUpdate({ repo: c.repo, tag: c.tag, currentImageId: c.imageId });
+      return { name: c.name, ...status };
+    }));
+    res.json(results);
+  } catch (e) {
+    res.status(500).json({ error: String(e.message || e) });
+  }
+});
+
+// Per-container update check. Still useful for a single-container refresh
+// (e.g. right after an upgrade); the full-sweep path should prefer the batch
+// endpoint above instead of looping this one per container.
 app.get('/api/containers/:name/update-status', async (req, res) => {
   try {
     const containers = await listContainers();
